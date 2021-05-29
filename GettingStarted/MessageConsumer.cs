@@ -1,5 +1,7 @@
 using System.Threading.Tasks;
+
 using MassTransit;
+
 using Microsoft.Extensions.Logging;
 
 namespace GettingStarted
@@ -21,7 +23,10 @@ namespace GettingStarted
 
         public Task Consume(ConsumeContext<Message> context)
         {
-            _logger.LogInformation("Received Text: {Text}", context.Message.Text);
+            if (context.ReceiveContext is CloudEventReceiveContext receiveContext)
+                _logger.LogInformation("Received Text: {Text}. Sent By User: {UserId}", context.Message.Text, receiveContext.Envelope.GetUserId());
+            else
+                _logger.LogInformation("Received Text: {Text}", context.Message.Text);
 
             return Task.CompletedTask;
         }
