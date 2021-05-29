@@ -21,7 +21,7 @@ namespace GettingStarted
             {
                 await _bus.Publish(new Message {Text = $"The time is {DateTimeOffset.Now}"});
 
-                await Task.Delay(1000, stoppingToken);
+                await Task.Delay(5_000, stoppingToken);
             }
         }
     }
