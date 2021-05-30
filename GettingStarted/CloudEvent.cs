@@ -186,7 +186,10 @@ namespace GettingStarted
 
         private Type GetMessageType()
         {
-            return _typeMap[_cloudEvent.Type];
+            if (_typeMap.TryGetValue(_cloudEvent.Type, out var type))
+                return type;
+
+            return Type.GetType(_cloudEvent.Type);
         }
 
         public override bool TryGetMessage<T>(out ConsumeContext<T> consumeContext)
@@ -261,8 +264,6 @@ namespace GettingStarted
         {
             _typeMap = typeMap
                 .ToDictionary(p => p.Value, p => p.Key);
-
-            _typeMap[typeof(MassTransit.Events.ReceiveFaultEvent)] = nameof(MassTransit.Events.ReceiveFaultEvent);
             _source = new Uri(source);
         }
 
@@ -276,7 +277,7 @@ namespace GettingStarted
                 var envelope = new CloudEvent(UserId.AllAttributes);
                 envelope.Id = context.MessageId?.ToString();
                 envelope.Source = _source;
-                envelope.Type = _typeMap[context.Message.GetType()];
+                envelope.Type = GetMessageTypeName(context.Message.GetType());
                 envelope.Time = context.SentTime;
                 envelope.Data = context.Message;
                 envelope.DataContentType = "application/json";
@@ -299,6 +300,14 @@ namespace GettingStarted
             {
                 throw new SerializationException("Failed to serialize message", ex);
             }
+        }
+
+        private string GetMessageTypeName(Type type)
+        {
+            if (_typeMap.TryGetValue(type, out var name))
+                return name;
+
+            return type.FullName;
         }
 
         private static readonly ContentType _contentType = new ContentType(CloudEvent.MediaType);
