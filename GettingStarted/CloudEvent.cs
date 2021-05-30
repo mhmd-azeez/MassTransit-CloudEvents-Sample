@@ -257,13 +257,14 @@ namespace GettingStarted
     public class CloudEventSerializer :
         IMessageSerializer
     {
-        private Dictionary<Type, string> _typeMap;
+        private IReadOnlyDictionary<Type, string> _typeMap;
         private Uri _source;
 
         public CloudEventSerializer(string source, IReadOnlyDictionary<string, Type> typeMap)
         {
             _typeMap = typeMap
                 .ToDictionary(p => p.Value, p => p.Key);
+
             _source = new Uri(source);
         }
 
