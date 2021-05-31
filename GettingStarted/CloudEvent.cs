@@ -17,6 +17,7 @@ using System.Buffers;
 using System.Threading.Tasks;
 using MassTransit.Topology;
 using System.Threading;
+using System.Reflection;
 
 namespace GettingStarted
 {
@@ -148,12 +149,18 @@ namespace GettingStarted
     {
         private readonly IReadOnlyDictionary<string, Type> _typeMap;
         private CloudEvent _cloudEvent;
+        private readonly Assembly[] _assemblies;
 
-        internal CloudEventConsumeContext(ReceiveContext receiveContext, IReadOnlyDictionary<string, Type> typeMap, CloudEvent cloudEvent)
+        internal CloudEventConsumeContext(
+            ReceiveContext receiveContext,
+            IReadOnlyDictionary<string, Type> typeMap,
+            CloudEvent cloudEvent,
+            Assembly[] assemblies)
             : base(new CloudEventReceiveContext(cloudEvent, receiveContext))
         {
             _typeMap = typeMap;
             _cloudEvent = cloudEvent;
+            _assemblies = assemblies;
             MessageId = receiveContext.TransportHeaders.Get<Guid>(nameof(MessageContext.MessageId));
         }
 
@@ -189,7 +196,19 @@ namespace GettingStarted
             if (_typeMap.TryGetValue(_cloudEvent.Type, out var type))
                 return type;
 
-            return Type.GetType(_cloudEvent.Type);
+            type = Type.GetType(_cloudEvent.Type);
+            if (type != null)
+                return type;
+
+            foreach (var assembly in _assemblies)
+            {
+                type = assembly.GetType(_cloudEvent.Type);
+                if (type != null)
+                    return type;
+            }
+
+            Trace.WriteLine($"Could not map '{_cloudEvent.Type}' to a .NET type");
+            return null;
         }
 
         public override bool TryGetMessage<T>(out ConsumeContext<T> consumeContext)
@@ -198,7 +217,10 @@ namespace GettingStarted
 
             try
             {
-                var dataObject = ((JsonElement)_cloudEvent.Data).ToObject(GetMessageType());
+                var type = GetMessageType();
+                if (type is null) return false;
+
+                var dataObject = ((JsonElement)_cloudEvent.Data).ToObject(type);
 
                 if (dataObject is T msg)
                 {
@@ -225,14 +247,14 @@ namespace GettingStarted
 
     public class CloudEventDeserializer : IMessageDeserializer
     {
-        public CloudEventDeserializer(IReadOnlyDictionary<string, Type> typeMap)
+        public CloudEventDeserializer(IReadOnlyDictionary<string, Type> typeMap, Assembly[] assemblies)
         {
-            _typeMap = typeMap.ToDictionary(p => p.Key, p => p.Value);
-
-            _typeMap[nameof(MassTransit.Events.ReceiveFaultEvent)] = typeof(MassTransit.Events.ReceiveFaultEvent);
+            _typeMap = typeMap;
+            _assemblies = assemblies;
         }
 
-        private readonly Dictionary<string, Type> _typeMap;
+        private readonly IReadOnlyDictionary<string, Type> _typeMap;
+        private readonly Assembly[] _assemblies;
 
         public void Probe(ProbeContext context)
         {
@@ -248,7 +270,7 @@ namespace GettingStarted
                 new ContentType(CloudEvent.MediaType),
                 UserId.AllAttributes);
 
-            return new CloudEventConsumeContext(receiveContext, _typeMap, cloudEvent);
+            return new CloudEventConsumeContext(receiveContext, _typeMap, cloudEvent, _assemblies);
         }
 
         public ContentType ContentType => new ContentType(CloudEvent.MediaType);

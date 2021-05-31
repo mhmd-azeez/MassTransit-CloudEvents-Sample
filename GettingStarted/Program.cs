@@ -30,11 +30,13 @@ namespace GettingStarted
                             { "message", typeof(Message) }
                         };
 
+                        var assemblies = new[] { typeof(Program).Assembly };
+
                         x.UsingRabbitMq((context, cfg) =>
                         {
                             cfg.AddMessageDeserializer(
                                 new ContentType(CloudEvent.MediaType), 
-                                () => new CloudEventDeserializer(typeMap));
+                                () => new CloudEventDeserializer(typeMap, assemblies));
 
                             cfg.SetMessageSerializer(
                                 () => new CloudEventSerializer("https://cloudevents.io", typeMap));
