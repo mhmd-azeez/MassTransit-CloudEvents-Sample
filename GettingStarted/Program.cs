@@ -24,19 +24,18 @@ namespace GettingStarted
                     services.AddMassTransit(x =>
                     {
                         x.AddConsumer<MessageConsumer>();
+                        x.AddConsumer<Message2Consumer>();
 
-                        var typeMap = new Dictionary<string, Type>
+                        var typeMap = new Dictionary<Type, string>
                         {
-                            { "message", typeof(Message) }
+                            { typeof(Message), "compatibility.message" }
                         };
-
-                        var assemblies = new[] { typeof(Program).Assembly };
 
                         x.UsingRabbitMq((context, cfg) =>
                         {
                             cfg.AddMessageDeserializer(
                                 new ContentType(CloudEvent.MediaType), 
-                                () => new CloudEventDeserializer(typeMap, assemblies));
+                                () => new CloudEventDeserializer(typeMap));
 
                             cfg.SetMessageSerializer(
                                 () => new CloudEventSerializer("https://cloudevents.io", typeMap));

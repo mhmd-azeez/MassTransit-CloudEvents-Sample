@@ -18,6 +18,7 @@ using System.Threading.Tasks;
 using MassTransit.Topology;
 using System.Threading;
 using System.Reflection;
+using MassTransit.Metadata;
 
 namespace GettingStarted
 {
@@ -147,20 +148,18 @@ namespace GettingStarted
 
     internal class CloudEventConsumeContext : DeserializerConsumeContext
     {
-        private readonly IReadOnlyDictionary<string, Type> _typeMap;
+        private readonly IReadOnlyDictionary<Type, string> _typeMap;
         private CloudEvent _cloudEvent;
-        private readonly Assembly[] _assemblies;
+        private readonly IDictionary<Type, ConsumeContext> _messageTypes = new Dictionary<Type, ConsumeContext>();
 
         internal CloudEventConsumeContext(
             ReceiveContext receiveContext,
-            IReadOnlyDictionary<string, Type> typeMap,
             CloudEvent cloudEvent,
-            Assembly[] assemblies)
+            IReadOnlyDictionary<Type, string> typeMap = null)
             : base(new CloudEventReceiveContext(cloudEvent, receiveContext))
         {
-            _typeMap = typeMap;
+            _typeMap = typeMap ?? new Dictionary<Type, string>();
             _cloudEvent = cloudEvent;
-            _assemblies = assemblies;
             MessageId = receiveContext.TransportHeaders.Get<Guid>(nameof(MessageContext.MessageId));
         }
 
@@ -191,70 +190,67 @@ namespace GettingStarted
         public override HostInfo Host => default;
         public override IEnumerable<string> SupportedMessageTypes => Enumerable.Empty<string>();
 
-        private Type GetMessageType()
+        public override bool TryGetMessage<T>(out ConsumeContext<T> message)
         {
-            if (_typeMap.TryGetValue(_cloudEvent.Type, out var type))
-                return type;
-
-            type = Type.GetType(_cloudEvent.Type);
-            if (type != null)
-                return type;
-
-            foreach (var assembly in _assemblies)
+            lock (_messageTypes)
             {
-                type = assembly.GetType(_cloudEvent.Type);
-                if (type != null)
-                    return type;
-            }
+                if (_messageTypes.TryGetValue(typeof(T), out var existing))
+                {
+                    message = existing as ConsumeContext<T>;
+                    return message != null;
+                }
 
-            Trace.WriteLine($"Could not map '{_cloudEvent.Type}' to a .NET type");
-            return null;
+                message = null;
+
+                if (MessageUrn.ForTypeString<T>().Equals(_cloudEvent.Type, StringComparison.OrdinalIgnoreCase) ||
+                    GetMessageTypeName<T>().Equals(_cloudEvent.Type, StringComparison.OrdinalIgnoreCase))
+                {
+                    var deserializeType = typeof(T);
+                    if (deserializeType.GetTypeInfo().IsInterface && TypeMetadataCache<T>.IsValidMessageType)
+                        deserializeType = TypeMetadataCache<T>.ImplementationType;
+
+                    var dataObject = ((JsonElement)_cloudEvent.Data).ToObject(deserializeType);
+                    _messageTypes[typeof(T)] = message = new MessageConsumeContext<T>(this, (T)dataObject);
+                    return true;
+                }
+                else
+                {
+                    _messageTypes[typeof(T)] = message = null;
+                }
+
+                return false;
+            }
         }
 
-        public override bool TryGetMessage<T>(out ConsumeContext<T> consumeContext)
+        private string GetMessageTypeName<T>()
         {
-            consumeContext = null;
+            if (_typeMap.TryGetValue(typeof(T), out var name))
+                return name;
 
-            try
-            {
-                var type = GetMessageType();
-                if (type is null) return false;
-
-                var dataObject = ((JsonElement)_cloudEvent.Data).ToObject(type);
-
-                if (dataObject is T msg)
-                {
-                    consumeContext = new MessageConsumeContext<T>(this, msg);
-                    return true;
-                };
-
-                return false;
-            }
-            catch (Exception e)
-            {
-                Trace.TraceError("Error Deserializing CloudEvent {ErrorMessage}\n Stack:{stack}", e.Message,
-                                 e.StackTrace);
-
-                return false;
-            }
+            return MessageUrn.ForTypeString<T>();
         }
 
         public override bool HasMessageType(Type messageType)
         {
-            return GetMessageType() == messageType;
+            lock (_messageTypes)
+            {
+                if (_messageTypes.TryGetValue(messageType, out var existing))
+                    return existing != null;
+            }
+
+            var typeUrn = MessageUrn.ForTypeString(messageType);
+            return typeUrn.Equals(_cloudEvent.Type, StringComparison.OrdinalIgnoreCase);
         }
     }
 
     public class CloudEventDeserializer : IMessageDeserializer
     {
-        public CloudEventDeserializer(IReadOnlyDictionary<string, Type> typeMap, Assembly[] assemblies)
+        public CloudEventDeserializer(IReadOnlyDictionary<Type, string> typeMap = null)
         {
-            _typeMap = typeMap;
-            _assemblies = assemblies;
+            _typeMap = typeMap ?? new Dictionary<Type, string>();
         }
 
-        private readonly IReadOnlyDictionary<string, Type> _typeMap;
-        private readonly Assembly[] _assemblies;
+        private readonly IReadOnlyDictionary<Type, string> _typeMap;
 
         public void Probe(ProbeContext context)
         {
@@ -270,7 +266,7 @@ namespace GettingStarted
                 new ContentType(CloudEvent.MediaType),
                 UserId.AllAttributes);
 
-            return new CloudEventConsumeContext(receiveContext, _typeMap, cloudEvent, _assemblies);
+            return new CloudEventConsumeContext(receiveContext, cloudEvent, _typeMap);
         }
 
         public ContentType ContentType => new ContentType(CloudEvent.MediaType);
@@ -282,11 +278,9 @@ namespace GettingStarted
         private IReadOnlyDictionary<Type, string> _typeMap;
         private Uri _source;
 
-        public CloudEventSerializer(string source, IReadOnlyDictionary<string, Type> typeMap)
+        public CloudEventSerializer(string source, IReadOnlyDictionary<Type, string> typeMap = null)
         {
-            _typeMap = typeMap
-                .ToDictionary(p => p.Value, p => p.Key);
-
+            _typeMap = typeMap ?? new Dictionary<Type, string>();
             _source = new Uri(source);
         }
 
@@ -297,13 +291,15 @@ namespace GettingStarted
             {
                 context.ContentType = new ContentType(CloudEvent.MediaType);
 
-                var envelope = new CloudEvent(UserId.AllAttributes);
-                envelope.Id = context.MessageId?.ToString();
-                envelope.Source = _source;
-                envelope.Type = GetMessageTypeName(context.Message.GetType());
-                envelope.Time = context.SentTime;
-                envelope.Data = context.Message;
-                envelope.DataContentType = "application/json";
+                var envelope = new CloudEvent(UserId.AllAttributes)
+                {
+                    Id = context.MessageId?.ToString(),
+                    Source = _source,
+                    Type = GetMessageTypeName<T>(),
+                    Time = context.SentTime,
+                    Data = context.Message,
+                    DataContentType = "application/json"
+                };
 
                 if (context.Headers.TryGetHeader("userId", out var value) && value is string userId)
                 {
@@ -325,12 +321,12 @@ namespace GettingStarted
             }
         }
 
-        private string GetMessageTypeName(Type type)
+        private string GetMessageTypeName<T>()
         {
-            if (_typeMap.TryGetValue(type, out var name))
+            if (_typeMap.TryGetValue(typeof(T), out var name))
                 return name;
 
-            return type.FullName;
+            return MessageUrn.ForTypeString<T>();
         }
 
         private static readonly ContentType _contentType = new ContentType(CloudEvent.MediaType);

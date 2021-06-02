@@ -24,6 +24,11 @@ namespace GettingStarted
                     context.Headers.Set("userId", "1");
                 });
 
+                await _bus.Publish<Message2>(new { Text = $"The time is {DateTimeOffset.Now}" }, context =>
+                {
+                    context.Headers.Set("userId", "1");
+                });
+
                 await Task.Delay(5_000, stoppingToken);
             }
         }
