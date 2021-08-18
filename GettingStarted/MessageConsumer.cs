@@ -28,8 +28,8 @@ namespace GettingStarted
 
         public Task Consume(ConsumeContext<Message> context)
         {
-            if (context.ReceiveContext is CloudEventReceiveContext receiveContext)
-                _logger.LogInformation("Received Text: {Text}. Sent By User: {UserId}", context.Message.Text, receiveContext.Envelope.GetUserId());
+            if (context.ReceiveContext.TryGetCloudEventEnvelope(out var envelope))
+                _logger.LogInformation("Received Text: {Text}. Sent By User: {UserId}", context.Message.Text, envelope.GetUserId());
             else
                 _logger.LogInformation("Received Text: {Text}", context.Message.Text);
 

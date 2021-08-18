@@ -68,6 +68,27 @@ namespace GettingStarted
         }
     }
 
+    public static class Defaults
+    {
+        public const string EnvelopeHeaderKey = "cloudevents.envelope";
+        public static bool TryGetCloudEventEnvelope(this ReceiveContext receiveContext, out CloudEvent envelope)
+        {
+            if (receiveContext is CloudEventReceiveContext context)
+            {
+                envelope = context.Envelope;
+                return true;
+            }
+            else if (receiveContext.TransportHeaders.TryGetHeader(EnvelopeHeaderKey, out var value) && value is CloudEvent e)
+            {
+                envelope = e;
+                return true;
+            }
+
+            envelope = null;
+            return false;
+        }
+    }
+
     public static class UserId
     {
         private static readonly CloudEventAttribute[] cloudEventAttributes = new[] { UserIdAttribute };
@@ -98,6 +119,9 @@ namespace GettingStarted
         {
             Envelope = envelope;
             InnerContext = innerContext;
+            var dict = innerContext.TransportHeaders.ToDictionary(h => h.Key, h => h.Value);
+            dict[Defaults.EnvelopeHeaderKey] = envelope;
+            TransportHeaders = new DictionarySendHeaders(dict);
         }
 
         public CloudEvent Envelope { get; }
@@ -123,7 +147,7 @@ namespace GettingStarted
         public Uri InputAddress => InnerContext.InputAddress;
         public ContentType ContentType => InnerContext.ContentType;
         public bool Redelivered => InnerContext.Redelivered;
-        public Headers TransportHeaders => InnerContext.TransportHeaders;
+        public Headers TransportHeaders { get; }
         public Task ReceiveCompleted => InnerContext.ReceiveCompleted;
         public bool IsDelivered => InnerContext.IsDelivered;
         public bool IsFaulted => InnerContext.IsFaulted;
